@@ -5,11 +5,4 @@
       <configuration sdkName="Python 2.7 (pa1)" />
     </facet>
   </component>
-  <component name="NewModuleRootManager" inherit-compiler-output="true">
-    <exclude-output />
-    <content url="file://$MODULE_DIR$" />
-    <orderEntry type="inheritedJdk" />
-    <orderEntry type="sourceFolder" forTests="false" />
-    <orderEntry type="library" name="Python 2.7 (pa1) interpreter library" level="application" />
-  </component>
 </module>
