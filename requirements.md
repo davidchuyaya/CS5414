@@ -1,5 +1,5 @@
 # Requirements
 List requirements here:
-- requirement1
-- requirement2
+- Java 1.8
+- Gradle 4.8
 - ...

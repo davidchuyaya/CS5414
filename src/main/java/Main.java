@@ -6,12 +6,12 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public class Main
 {
@@ -22,21 +22,23 @@ public class Main
 	private final int port;
 	private int privatePort;
 	private final Map<String, Long> timestampFromServerId;
+	private final Map<Integer, LinkedList<String>> messageQForServerPort;
 	private final List<String> messages = new ArrayList<>();
 	private final ExecutorService threadPool;
-	private ServerSocket serverSocket;
 
 	public static void main(String[] args) { new Main(args); }
 
 	private Main(String[] args)
 	{
 		if (args.length != 3)
-			throw new RuntimeException("Needs id, num processes, port");
+			throw new RuntimeException("Needs id, num processes, port: " + args.length);
 
 		id = args[0];
 		numProcesses = Integer.parseInt(args[1]);
 		port = Integer.parseInt(args[2]);
 		timestampFromServerId = new HashMap<>(numProcesses);
+		timestampFromServerId.put(id, 0L);
+		messageQForServerPort = new HashMap<>(numProcesses);
 
 		threadPool = Executors.newFixedThreadPool(numProcesses * 3);
 		createShutdownListener();
@@ -51,20 +53,26 @@ public class Main
 			int serverPort = i + MIN_PORT;
 			if (serverPort == privatePort)
 				continue;
+
+			LinkedList<String> queue = new LinkedList<>();
+			messageQForServerPort.put(serverPort, queue);
 			threadPool.execute(() -> {
 				while (true)
 				{
 					try
 					{
-						Socket socket = new Socket("127.0.0.1", serverPort);
+						Socket socket = new Socket("localhost", serverPort);
 						socket.setReuseAddress(true);
 						PrintWriter out = getWriter(socket);
 
-						//send heartbeat
+						//send heartbeat + any broadcast
 						while (true)
 						{
-							out.println(id);
-							Thread.sleep(500);
+							String message = queue.poll();
+							if (message == null)
+								message = "";
+							out.println(id + " " + message);
+							Thread.sleep(200);
 						}
 					}
 					catch (Exception ignored) {}
@@ -76,7 +84,7 @@ public class Main
 	{
 		try
 		{
-			serverSocket = nextAvailableSocket();
+			ServerSocket serverSocket = nextAvailableSocket();
 			privatePort = serverSocket.getLocalPort();
 			serverSocket.setReuseAddress(true);
 			for (int i = 0; i < numProcesses; i++)
@@ -90,27 +98,32 @@ public class Main
 							BufferedReader in = getReader(socket);
 
 							//receive & timestamp heartbeat
-							String id;
-							while ((id = in.readLine()) != null)
+							String line;
+							while ((line = in.readLine()) != null)
+							{
+								String[] parts = line.split("\\s");
+								String id = parts[0];
+								String message = line.substring(id.length() + 1);
+								if (!message.isEmpty())
+									messages.add(message);
 								timestampFromServerId.put(id, System.currentTimeMillis());
+							}
 						}
-						catch (IOException ignored) {
-							System.out.println("clients are ded");
-						}
+						catch (IOException ignored) {}
 					}
 				});
 			}
 		}
-		catch (IOException e) { System.out.println("server ded"); }
+		catch (IOException ignored) {}
 	}
 	private void openMasterSocket()
 	{
 		try
 		{
-			serverSocket = new ServerSocket(port);
-			serverSocket.setReuseAddress(true);
 			while (true)
 			{
+				ServerSocket serverSocket = new ServerSocket(port);
+				serverSocket.setReuseAddress(true);
 				Socket socket = serverSocket.accept();
 				PrintWriter out = getWriter(socket);
 				BufferedReader in = getReader(socket);
@@ -127,10 +140,11 @@ public class Main
 							break;
 						case "alive":
 							long now = System.currentTimeMillis();
-							message = "alive " + Stream.concat(Stream.of(id),
+							message = "alive " +
 									timestampFromServerId.entrySet().stream()
-											.filter(entry -> now - entry.getValue() < 1000)
-											.map(Map.Entry::getKey))
+											.filter(entry -> entry.getKey().equals(id) ||
+													now - entry.getValue() < 1000)
+									.map(Map.Entry::getKey)
 									.sorted()
 									.collect(Collectors.joining(","));
 							out.println(message.length() + "-" + message);
@@ -139,7 +153,9 @@ public class Main
 							String broadcast = "broadcast ";
 							if (!line.startsWith(broadcast))
 								throw new IOException("Invalid message from master");
-							messages.add(line.substring(broadcast.length()));
+							message = line.substring(broadcast.length());
+							addMessageToQs(message-);
+//							messages.add(message);
 							break;
 					}
 				}
@@ -171,5 +187,9 @@ public class Main
 		}
 		System.out.println("All ports in use");
 		return null;
+	}
+	private void addMessageToQs(String message)
+	{
+		messageQForServerPort.forEach((port, q) -> q.addFirst(message));
 	}
 }
