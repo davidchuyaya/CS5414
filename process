@@ -1,2 +1,2 @@
 #!/bin/bash
-java -cp  target/MyJar.jar MyMainClass $1 $2 $3
+java -cp out/libs/chatroom-1.0.jar Main $1 $2 $3
