@@ -143,7 +143,7 @@ public class Main
 							List<String> alives = new ArrayList<>(numProcesses);
 							for (int i = 0; i < timestampFromServerId.length; i++)
 								if (i == id || now - timestampFromServerId[i] < 1000)
-									alives.add(String.valueOf(id));
+									alives.add(String.valueOf(i));
 							Collections.sort(alives);
 							message = "alive " + String.join(",", alives);
 							out.println(message.length() + "-" + message);
