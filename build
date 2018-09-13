@@ -1,3 +1,4 @@
 #!/bin/bash
 mkdir -p out
 ./gradlew build
+./gradlew --stop

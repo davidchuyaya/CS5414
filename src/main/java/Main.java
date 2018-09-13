@@ -5,24 +5,21 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
 
 public class Main
 {
 	private static final int MIN_PORT = 20000;
 	private static final int MAX_PORT = 29999;
-	private final String id;
+	private final int id;
 	private final int numProcesses;
 	private final int port;
-	private int privatePort;
-	private final Map<String, Long> timestampFromServerId;
-	private final Map<Integer, LinkedList<String>> messageQForServerPort;
+	private final long[] timestampFromServerId;
+	private final LinkedList<String>[] messageQForId;
 	private final List<String> messages = new ArrayList<>();
 	private final ExecutorService threadPool;
 
@@ -33,29 +30,30 @@ public class Main
 		if (args.length != 3)
 			throw new RuntimeException("Needs id, num processes, port: " + args.length);
 
-		id = args[0];
+		id = Integer.parseInt(args[0]);
 		numProcesses = Integer.parseInt(args[1]);
 		port = Integer.parseInt(args[2]);
-		timestampFromServerId = new HashMap<>(numProcesses);
-		timestampFromServerId.put(id, 0L);
-		messageQForServerPort = new HashMap<>(numProcesses);
+		timestampFromServerId = new long[numProcesses];
+		timestampFromServerId[id] = 0L;
+		messageQForId = (LinkedList<String>[]) new LinkedList[numProcesses];
 
 		threadPool = Executors.newFixedThreadPool(numProcesses * 3);
-		createShutdownListener();
-		threadPool.execute(this::openMasterSocket);
-		threadPool.execute(this::openReceiveSocket);
 		openSendSockets();
+		threadPool.execute(this::openReceiveSocket);
+		threadPool.execute(this::openMasterSocket);
+		createShutdownListener();
 	}
 	private void openSendSockets()
 	{
 		for (int i = 0; i < numProcesses; i++)
 		{
-			int serverPort = i + MIN_PORT;
-			if (serverPort == privatePort)
-				continue;
+			int serverPort = portForId(i);
 
 			LinkedList<String> queue = new LinkedList<>();
-			messageQForServerPort.put(serverPort, queue);
+			messageQForId[i] = queue;
+
+			if (i == id)
+				continue;
 			threadPool.execute(() -> {
 				while (true)
 				{
@@ -65,14 +63,17 @@ public class Main
 						socket.setReuseAddress(true);
 						PrintWriter out = getWriter(socket);
 
+						String message = null;
 						//send heartbeat + any broadcast
 						while (true)
 						{
-							String message = queue.poll();
-							if (message == null)
-								message = "";
-							out.println(id + " " + message);
-							Thread.sleep(200);
+							do
+							{
+								if (message == null)
+									message = "";
+								out.println(id + " " + message);
+							} while ((message = queue.poll()) != null);
+							Thread.sleep(500);
 						}
 					}
 					catch (Exception ignored) {}
@@ -84,8 +85,7 @@ public class Main
 	{
 		try
 		{
-			ServerSocket serverSocket = nextAvailableSocket();
-			privatePort = serverSocket.getLocalPort();
+			ServerSocket serverSocket = new ServerSocket(portForId(id));
 			serverSocket.setReuseAddress(true);
 			for (int i = 0; i < numProcesses; i++)
 			{
@@ -102,11 +102,11 @@ public class Main
 							while ((line = in.readLine()) != null)
 							{
 								String[] parts = line.split("\\s");
-								String id = parts[0];
-								String message = line.substring(id.length() + 1);
+								int id = Integer.parseInt(parts[0]);
+								String message = line.substring(parts[0].length() + 1);
 								if (!message.isEmpty())
 									messages.add(message);
-								timestampFromServerId.put(id, System.currentTimeMillis());
+								timestampFromServerId[id] = System.currentTimeMillis();
 							}
 						}
 						catch (IOException ignored) {}
@@ -140,36 +140,34 @@ public class Main
 							break;
 						case "alive":
 							long now = System.currentTimeMillis();
-							message = "alive " +
-									timestampFromServerId.entrySet().stream()
-											.filter(entry -> entry.getKey().equals(id) ||
-													now - entry.getValue() < 1000)
-									.map(Map.Entry::getKey)
-									.sorted()
-									.collect(Collectors.joining(","));
+							List<String> alives = new ArrayList<>(numProcesses);
+							for (int i = 0; i < timestampFromServerId.length; i++)
+								if (i == id || now - timestampFromServerId[i] < 1000)
+									alives.add(String.valueOf(id));
+							Collections.sort(alives);
+							message = "alive " + String.join(",", alives);
 							out.println(message.length() + "-" + message);
 							break;
 						default:
 							String broadcast = "broadcast ";
 							if (!line.startsWith(broadcast))
-								throw new IOException("Invalid message from master");
+								break;
 							message = line.substring(broadcast.length());
-							addMessageToQs(message-);
-//							messages.add(message);
+							addMessageToQs(message);
+							messages.add(message);
 							break;
 					}
 				}
 
 			}
 		}
-		catch (IOException e) { System.out.println("server master ded"); }
+		catch (IOException ignored) {}
 	}
 
 	private void createShutdownListener()
 	{
 		Runtime.getRuntime().addShutdownHook(new Thread(threadPool::shutdown));
 	}
-
 	private PrintWriter getWriter(Socket socket) throws IOException
 	{
 		return new PrintWriter(socket.getOutputStream(), true);
@@ -178,18 +176,13 @@ public class Main
 	{
 		return new BufferedReader(new InputStreamReader(socket.getInputStream()));
 	}
-	private ServerSocket nextAvailableSocket()
+	private int portForId(int id)
 	{
-		for (int i = MIN_PORT; i <= MAX_PORT; i++)
-		{
-			try { return new ServerSocket(i); }
-			catch (IOException ignored) {} //port in use
-		}
-		System.out.println("All ports in use");
-		return null;
+		return MIN_PORT + id;
 	}
 	private void addMessageToQs(String message)
 	{
-		messageQForServerPort.forEach((port, q) -> q.addFirst(message));
+		for (LinkedList<String> q : messageQForId)
+			q.add(message);
 	}
 }
